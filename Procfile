@@ -1,1 +1,1 @@
-worker: python serena_wild_bot.py
+worker: python main.py
