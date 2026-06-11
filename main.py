@@ -1,26 +1,25 @@
+import os
 import logging
 import random
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes
 )
 
-# =============================================
-# CONFIGURAÇÕES — edite aqui
-# =============================================
-TOKEN = "8799350801:AAEsmD30Awq1Iw-r3NJ3XjMQ_u8C5qdEdcw"
-LINK_CONTEUDO = "https://seulink.com"  # Substitua pelo seu link real
+TOKEN = os.environ.get("TOKEN", "8799350801:AAEsmD30Awq1Iw-r3NJ3XjMQ_u8C5qdEdcw")
 
-# =============================================
-# PERSONA: SERENA WILD
-# =============================================
+DIA_ENVIO = 1
+HORA_ENVIO = 20
+MINUTO_ENVIO = 0
+
 NOME = "Serena Wild"
 
 RESPOSTAS_INICIO = [
-    f"Hmm... então você finalmente apareceu. Eu sou {NOME}, e aqui as regras são minhas. 😏\n\nSe quer ver o que eu tenho pra oferecer, vai ter que me convencer primeiro. Use /catalogo para ver o que está disponível.",
-    f"Olha quem chegou... 👁️ Eu sou {NOME}. Não sou qualquer uma — sou exatamente o que você estava precisando.\n\nDigite /catalogo e me prove que merece.",
-    f"Você bateu na porta certa, mas aqui quem decide os próximos passos sou eu. Chamo {NOME}. 🖤\n\nUse /catalogo se tiver coragem.",
+    "Hmm... então você finalmente apareceu. Eu sou Serena Wild, e aqui as regras são minhas. 😏\n\nUse /catalogo para ver o que está disponível.",
+    "Olha quem chegou... 👁️ Eu sou Serena Wild. Não sou qualquer uma — sou exatamente o que você estava precisando.\n\nDigite /catalogo e me prove que merece.",
+    "Você bateu na porta certa, mas aqui quem decide os próximos passos sou eu. 🖤\n\nUse /catalogo se tiver coragem.",
 ]
 
 RESPOSTAS_CONVERSA = [
@@ -58,15 +57,15 @@ RESPOSTAS_COMPRAR = [
     "Ansioso? Isso é bom sinal. Use /avisar e eu te chamo pessoalmente quando abrir. 😏",
 ]
 
-lista_vip = []  # Armazena IDs dos interessados
-
-# =============================================
-# HANDLERS
-# =============================================
+lista_vip = []
 
 logging.basicConfig(level=logging.INFO)
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.chat_id
+    if user_id not in lista_vip:
+        lista_vip.append(user_id)
     texto = random.choice(RESPOSTAS_INICIO)
     keyboard = [
         [InlineKeyboardButton("📂 Ver Catálogo", callback_data="catalogo")],
@@ -99,7 +98,6 @@ async def avisar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data == "catalogo":
         keyboard = [
             [InlineKeyboardButton("💳 Quero comprar", callback_data="comprar")],
@@ -107,7 +105,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text(RESPOSTAS_CATALOGO, reply_markup=reply_markup, parse_mode="Markdown")
-
     elif query.data == "avisar":
         user_id = query.message.chat_id
         if user_id not in lista_vip:
@@ -115,48 +112,36 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             "✅ Anotado. Você está na lista VIP da Serena Wild.\nFique de olho no seu Telegram. 🖤"
         )
-
     elif query.data == "comprar":
         await query.message.reply_text(random.choice(RESPOSTAS_COMPRAR))
 
 
 async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.chat_id
+    if user_id not in lista_vip:
+        lista_vip.append(user_id)
     texto = update.message.text.lower()
-
-    # Detecta elogios
-    palavras_elogio = ["linda", "gostosa", "perfeita", "incrível", "maravilhosa", "top", "boa"]
+    palavras_elogio = ["linda", "gostosa", "perfeita", "incrivel", "maravilhosa", "top", "boa"]
     if any(p in texto for p in palavras_elogio):
         await update.message.reply_text(random.choice(RESPOSTAS_ELOGIO))
         return
-
-    # Detecta interesse em compra
-    palavras_compra = ["comprar", "quero", "preço", "valor", "quanto", "pagar", "link"]
+    palavras_compra = ["comprar", "quero", "preco", "valor", "quanto", "pagar", "link"]
     if any(p in texto for p in palavras_compra):
         await update.message.reply_text(random.choice(RESPOSTAS_COMPRAR))
         return
-
-    # Resposta padrão humanizada
     await update.message.reply_text(random.choice(RESPOSTAS_CONVERSA))
 
 
-# =============================================
-# MAIN
-# =============================================
-
 def main():
-    def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("catalogo", catalogo))
     app.add_handler(CommandHandler("avisar", avisar))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
-
     print("🖤 Serena Wild está online...")
     app.run_polling(stop_signals=None)
 
 
 if __name__ == "__main__":
     main()
-    
