@@ -1,1 +1,1 @@
-worker: python serena_wild_bot.py
+python-telegram-bot[job-queue]==20.7
