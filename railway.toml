@@ -1,2 +1,2 @@
-toml[deploy]
+[deploy]
 startCommand = "python main.py"
