@@ -1,0 +1,1 @@
+worker: python serena_wild_bot.py
