@@ -144,6 +144,7 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============================================
 
 def main():
+    def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -153,8 +154,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
 
     print("🖤 Serena Wild está online...")
-    app.run_polling()
+    app.run_polling(stop_signals=None)
 
 
 if __name__ == "__main__":
     main()
+    
