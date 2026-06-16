@@ -1,7 +1,6 @@
 import os
 import logging
 import random
-import json
 from datetime import datetime, timedelta
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,6 +9,7 @@ from telegram.ext import (
     CallbackQueryHandler, filters, ContextTypes
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pymongo import MongoClient
 import asyncio
 
 # =============================================
@@ -18,34 +18,28 @@ import asyncio
 TOKEN = os.environ.get("TOKEN")
 GRUPO_ID = -1003860216725
 PORT = int(os.environ.get("PORT", 8080))
-ASSINANTES_FILE = "assinantes.json"
+MONGO_URL = os.environ.get("MONGO_URL")
 
 # =============================================
-# GERENCIAMENTO DE ASSINANTES
+# MONGODB
 # =============================================
-
-def carregar_assinantes():
-    try:
-        with open(ASSINANTES_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def salvar_assinantes(assinantes):
-    with open(ASSINANTES_FILE, "w") as f:
-        json.dump(assinantes, f)
+client = MongoClient(MONGO_URL)
+db = client["serena_wild"]
+assinantes_col = db["assinantes"]
 
 def adicionar_assinante(telegram_id, plano, dias):
-    assinantes = carregar_assinantes()
-    expiracao = (datetime.now() + timedelta(days=dias)).isoformat()
-    assinantes[str(telegram_id)] = {"plano": plano, "expiracao": expiracao}
-    salvar_assinantes(assinantes)
+    expiracao = datetime.now() + timedelta(days=dias)
+    assinantes_col.update_one(
+        {"telegram_id": str(telegram_id)},
+        {"$set": {"plano": plano, "expiracao": expiracao}},
+        upsert=True
+    )
 
 def remover_assinante(telegram_id):
-    assinantes = carregar_assinantes()
-    if str(telegram_id) in assinantes:
-        del assinantes[str(telegram_id)]
-        salvar_assinantes(assinantes)
+    assinantes_col.delete_one({"telegram_id": str(telegram_id)})
+
+def listar_assinantes():
+    return list(assinantes_col.find())
 
 # =============================================
 # PERSONA: SERENA WILD
@@ -151,11 +145,11 @@ async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============================================
 
 async def verificar_assinaturas(bot):
-    assinantes = carregar_assinantes()
+    assinantes = listar_assinantes()
     agora = datetime.now()
-    para_remover = []
-    for telegram_id, dados in assinantes.items():
-        expiracao = datetime.fromisoformat(dados["expiracao"])
+    for assinante in assinantes:
+        telegram_id = assinante["telegram_id"]
+        expiracao = assinante["expiracao"]
         dias_restantes = (expiracao - agora).days
         if dias_restantes == 1:
             try:
@@ -167,46 +161,58 @@ async def verificar_assinaturas(bot):
                 await bot.ban_chat_member(chat_id=GRUPO_ID, user_id=int(telegram_id))
                 await bot.unban_chat_member(chat_id=GRUPO_ID, user_id=int(telegram_id))
                 await bot.send_message(chat_id=int(telegram_id), text="😔 Sua assinatura VIP expirou e você foi removido do grupo.\n\nMas a porta continua aberta... 🖤\n\nUse /planos para renovar e voltar.")
-                para_remover.append(telegram_id)
+                remover_assinante(telegram_id)
             except Exception as e:
                 logging.error(f"Erro ao remover {telegram_id}: {e}")
-    for telegram_id in para_remover:
-        remover_assinante(telegram_id)
 
 # =============================================
-# WEBHOOK DA SHARKBOT
+# WEBHOOK DA HEROSPARK
 # =============================================
 
-async def sharkbot_webhook(request):
+async def herospark_webhook(request):
     try:
         data = await request.json()
-        event = data.get("event")
-        logging.info(f"Webhook recebido: {event}")
-        if event == "payment_approved":
-            customer = data.get("customer", {})
-            telegram_id = customer.get("telegram_id")
-            first_name = customer.get("first_name", "")
-            transaction = data.get("transaction", {})
-            plan_name = transaction.get("plan_name", "").lower()
-            if "semanal" in plan_name or "semana" in plan_name:
-                dias, plano = 7, "Semanal"
-            elif "anual" in plan_name or "ano" in plan_name:
-                dias, plano = 365, "Anual"
-            else:
-                dias, plano = 30, "Mensal"
-            if telegram_id:
-                bot = request.app["bot"]
-                try:
-                    await bot.unban_chat_member(chat_id=GRUPO_ID, user_id=int(telegram_id))
-                    link = await bot.create_chat_invite_link(chat_id=GRUPO_ID, member_limit=1, expire_date=datetime.now() + timedelta(minutes=10))
-                    adicionar_assinante(telegram_id, plano, dias)
-                    await bot.send_message(
-                        chat_id=int(telegram_id),
-                        text=f"✅ Pagamento confirmado! Bem-vindo ao VIP, {first_name}! 🖤\n\nPlano: *{plano}*\n\nClique no link abaixo para entrar no grupo exclusivo:\n👇👇👇\n{link.invite_link}\n\n_O link expira em 10 minutos. Use logo!_ 😏",
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    logging.error(f"Erro ao adicionar {telegram_id}: {e}")
+        logging.info(f"Webhook recebido: {data}")
+
+        # HeroSpark envia status da transação
+        status = data.get("status") or data.get("transaction", {}).get("status", "")
+        if status not in ["approved", "paid", "complete"]:
+            return web.Response(status=200, text="OK")
+
+        # Dados do cliente
+        customer = data.get("customer") or data.get("buyer") or {}
+        telegram_id = customer.get("telegram_id") or data.get("telegram_id")
+        first_name = customer.get("name") or customer.get("first_name", "")
+
+        # Dados do plano
+        plan_name = (data.get("product", {}).get("name", "") or data.get("plan_name", "")).lower()
+
+        if "semanal" in plan_name or "semana" in plan_name:
+            dias, plano = 7, "Semanal"
+        elif "anual" in plan_name or "ano" in plan_name:
+            dias, plano = 365, "Anual"
+        else:
+            dias, plano = 30, "Mensal"
+
+        if telegram_id:
+            bot = request.app["bot"]
+            try:
+                await bot.unban_chat_member(chat_id=GRUPO_ID, user_id=int(telegram_id))
+                link = await bot.create_chat_invite_link(
+                    chat_id=GRUPO_ID,
+                    member_limit=1,
+                    expire_date=datetime.now() + timedelta(minutes=10)
+                )
+                adicionar_assinante(telegram_id, plano, dias)
+                await bot.send_message(
+                    chat_id=int(telegram_id),
+                    text=f"✅ Pagamento confirmado! Bem-vindo ao VIP, {first_name}! 🖤\n\nPlano: *{plano}*\n\nClique no link abaixo para entrar no grupo exclusivo:\n👇👇👇\n{link.invite_link}\n\n_O link expira em 10 minutos. Use logo!_ 😏",
+                    parse_mode="Markdown"
+                )
+                logging.info(f"Usuário {telegram_id} adicionado ao grupo.")
+            except Exception as e:
+                logging.error(f"Erro ao adicionar {telegram_id}: {e}")
+
         return web.Response(status=200, text="OK")
     except Exception as e:
         logging.error(f"Erro no webhook: {e}")
@@ -223,27 +229,23 @@ async def main():
     app_telegram.add_handler(CallbackQueryHandler(button_callback))
     app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder))
 
-    # Scheduler separado
     scheduler = AsyncIOScheduler()
     scheduler.add_job(verificar_assinaturas, "interval", hours=1, args=[app_telegram.bot])
     scheduler.start()
 
-    # Servidor web para webhook
     web_app = web.Application()
     web_app["bot"] = app_telegram.bot
-    web_app.router.add_post("/webhook", sharkbot_webhook)
+    web_app.router.add_post("/webhook", herospark_webhook)
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
 
-    # Inicia o bot com polling
     await app_telegram.initialize()
     await app_telegram.start()
     await app_telegram.updater.start_polling(drop_pending_updates=True)
 
     print(f"🖤 Serena Wild está online! Webhook em 0.0.0.0:{PORT}/webhook")
-
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
